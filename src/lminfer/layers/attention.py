@@ -6,6 +6,50 @@ import triton.language as tl
 import triton
 
 
+@triton.jit
+def store_kvcache_kernel(
+    key_ptr,
+    value_ptr,
+    k_cache_ptr,
+    v_cache_ptr,
+    slot_mapping_ptr,
+    num_kv_heads: tl.constexpr,
+    head_dim: tl.constexpr,
+    block_size: tl.constexpr,
+):
+    token_idx = tl.program_id(0)
+    slot_idx = tl.load(slot_mapping_ptr + token_idx)
+
+
+def store_kvcache(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    block_size: int,
+):
+    num_tokens, num_kv_heads, head_dim = key.shape
+    if not key.is_contiguous():
+        key = key.contiguous()
+    if not value.is_contiguous():
+        value = value.contiguous()
+    assert k_cache.shape == v_cache.shape
+    assert slot_mapping.numel() == num_tokens
+    grid = (num_tokens, num_kv_heads)
+    store_kvcache_kernel[grid](
+        key,
+        value,
+        k_cache,
+        v_cache,
+        slot_mapping,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        block_size=block_size,
+    )
+
+
+@triton.jit
 def flash_attention_varlen_kernel(
     Q,
     K,
@@ -13,11 +57,11 @@ def flash_attention_varlen_kernel(
     O,
     cu_seqlens_q_ptr,
     scale,
-    num_heads,
-    num_kv_heads,
-    head_dim,
-    BLOCK_M,
-    BLOCK_N,
+    num_heads: tl.constexpr,
+    num_kv_heads: tl.constexpr,
+    head_dim: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
 ):
     # start_m: 当前block在序列维度上的起始位置,实际处理的序列为起始位置=start_m*BLOCK_M,长度为BLOCK_M
     start_m = tl.program_id(0)
@@ -154,6 +198,20 @@ def flash_attention_prefill(
     return output
 
 
+class Attention(nn.Module):
+    def __init__(self, num_heads, head_dim, scale, num_kv_heads, block_size):
+        super().__init__()
+        self.num_heads = num_heads
+        self, head_dim = head_dim
+        self.scale = scale
+        self.num_kv_heads = num_kv_heads or num_heads
+        self.block_size = block_size
+        self.k_cache = self.v_cache = torch.tensor([])
+
+    def forward(self, q, k, v):
+        pass
+
+
 if __name__ == "__main__":
     batch_size = 2
     num_heads = 4
@@ -161,11 +219,11 @@ if __name__ == "__main__":
     head_dim = 16
     seq_len = 10
 
-    q = torch.randn(batch_size, seq_len, num_heads * head_dim)
-    k = torch.randn(batch_size, seq_len, num_kv_heads * head_dim)
-    v = torch.randn(batch_size, seq_len, num_kv_heads * head_dim)
+    q = torch.randn(batch_size, seq_len, num_heads * head_dim).npu()
+    k = torch.randn(batch_size, seq_len, num_kv_heads * head_dim).npu()
+    v = torch.randn(batch_size, seq_len, num_kv_heads * head_dim).npu()
 
-    cu_seqlens = torch.tensor([0, 5, 10], dtype=torch.int32)
+    cu_seqlens = torch.tensor([0, 5, 10], dtype=torch.int32).npu()
 
     output = flash_attention_prefill(
         q,
