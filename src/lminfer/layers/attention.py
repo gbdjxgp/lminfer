@@ -20,6 +20,34 @@ def store_kvcache_kernel(
     token_idx = tl.program_id(0)
     slot_idx = tl.load(slot_mapping_ptr + token_idx)
 
+    if slot_idx == -1:
+        return
+
+    block_idx = slot_idx // block_size
+    block_offset = slot_idx % block_size
+
+    head_idx = tl.program_id(1)
+
+    head_offsets = tl.arange(0, head_dim)
+
+    # input: (num_tokens,num_kv_heads,head_dim)
+    input_offset = (
+        token_idx * num_kv_heads * head_dim + head_idx * head_dim + head_offsets
+    )
+    # cache: (num_blocks, block_size, num_kv_heads, head_dim)
+    cache_offset = (
+        block_idx * block_size * num_kv_heads * head_dim
+        + block_offset * num_kv_heads * head_dim
+        + head_idx * head_dim
+        + head_offsets
+    )
+
+    key = tl.load(key_ptr + input_offset)
+    value = tl.load(value_ptr + input_offset)
+
+    tl.store(k_cache_ptr + cache_offset, key)
+    tl.store(v_cache_ptr + cache_offset, value)
+
 
 def store_kvcache(
     key: torch.Tensor,
@@ -196,6 +224,94 @@ def flash_attention_prefill(
         BLOCK_N,
     )
     return output
+
+
+@triton.jit
+def paged_attention_decode_kernel(
+    output_ptr,
+    query_ptr,
+    k_cache_ptr,
+    v_cache_ptr,
+    block_tables_ptr,
+    context_lens_ptr,
+    scale: tl.constexpr,
+    num_heads: tl.constexpr,
+    num_kv_heads: tl.constexpr,
+    head_dim: tl.constexpr,
+    block_size: tl.constexpr,
+    max_num_blocks: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    # k_cache: (num_blocks, block_size, num_kv_heads, head_dim)
+    # v_cache: (num_blocks, block_size, num_kv_heads, head_dim)
+    # block_tables: (batch_size, max_num_blocks)
+    # context_lens: (batch_size,)
+    # grid: (batch_size, num_heads)
+    batch_idx = tl.program_id(0)
+    head_idx = tl.program_id(1)
+    
+    kv_head_idx = head_idx // (num_heads // num_kv_heads)
+    
+    context_len = tl.load(context_lens_ptr + batch_idx)
+    
+    offs_d = tl.arange(0,head_dim)
+    
+    # query: (batch_size,num_heads,head_dim)
+    q_offset = batch_idx*num_heads*head_dim+head_idx*head_dim+offs_d
+    q = tl.load(query_ptr+q_offset)
+    
+    acc = tl.zeros([head_dim],dtype=tl.float32)
+    l_i = 0.0
+    m_i = -1e10
+    
+    max_chunks = tl.cdiv(max_num_blocks*block_size,BLOCK_N)
+    pass
+
+
+def paged_attention_decode(
+    query: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    block_tables: torch.Tensor,
+    context_lens: torch.Tensor,
+    scale: float,
+    num_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    block_size: int,
+):
+    # query: (batch_size,num_heads,head_dim)
+    # k_cache: (num_blocks, block_size, num_kv_heads, head_dim)
+    # v_cache: (num_blocks, block_size, num_kv_heads, head_dim)
+    # block_tables: (batch_size, max_num_blocks)
+    # context_lens: (batch_size,)
+    batch_size = query.shape[0]
+    max_num_blocks = block_tables.shape[1]
+    
+    query = query.contiguous()
+    output = torch.empty_like(query)
+    BLOCK_N = 64 if head_dim <= 128 else 32
+    
+    grid = (batch_size, num_heads)
+    
+    paged_attention_decode_kernel[grid](
+        output,
+        query,
+        k_cache,
+        v_cache,
+        block_tables,
+        context_lens,
+        scale=scale,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        block_size=block_size,
+        max_num_blocks=max_num_blocks,
+        BLOCK_N=BLOCK_N
+    )
+    
+    return output
+    
 
 
 class Attention(nn.Module):
