@@ -253,7 +253,7 @@ def paged_attention_decode_kernel(
     kv_head_idx = head_idx // (num_heads // num_kv_heads)
     
     context_len = tl.load(context_lens_ptr + batch_idx)
-    
+    assert tl.min(context_len)>0
     offs_d = tl.arange(0,head_dim)
     
     # query: (batch_size,num_heads,head_dim)
@@ -265,7 +265,67 @@ def paged_attention_decode_kernel(
     m_i = -1e10
     
     max_chunks = tl.cdiv(max_num_blocks*block_size,BLOCK_N)
-    pass
+    # 外层循环: max_chunks,某个序列的所有token,按照BLOCK_N进行切分
+    for chunk_idx in range(max_chunks):
+        token_start = chunk_idx * BLOCK_N
+        if token_start < context_len:
+            # 有效的kvcache
+            offs_n = token_start + tl.arange(0,BLOCK_N)
+            mask_n = offs_n<context_len
+            qk = tl.zeros([BLOCK_N],dtype=tl.float32)-1e10
+            # 内层循环：对qk进行切块计算
+            # TODO: 这里的循环是否能优化掉?
+            for i in range(BLOCK_N):
+                token_idx = token_start+i
+                if token_idx<context_len:
+                    block_num = token_idx // block_size
+                    block_offset = token_idx % block_size
+                    # TODO: 这个判断是否必要?
+                    if block_num < max_num_blocks:
+                        block_tables_offset = batch_idx * max_num_blocks + block_num
+                        physical_block_idx = tl.load(block_tables_ptr+block_tables_offset)
+                        # TODO: 这个判断是否必要?
+                        if physical_block_idx !=-1:
+                            # k_cache_ptr: (num_blocks, block_size, num_kv_heads, head_dim)
+                            # k_offset shape: (head_dim)
+                            k_offset = (physical_block_idx*block_size*num_kv_heads*head_dim+block_offset*num_kv_heads*head_dim+kv_head_idx*head_dim+offs_d)
+                            k_vec = tl.load(k_cache_ptr+k_offset)
+                            # q shape: (head_dim)
+                            # 计算qk^T
+                            score = tl.sum(q*k_vec)*scale
+                            mask_i = tl.arange(0,BLOCK_N)==i
+                            qk=tl.where(mask_i,score,qk)
+            qk = tl.where(mask_n,qk,-1e10)
+            m_ij=tl.max(qk)
+            m_i_new = tl.maximum(m_i,m_ij)
+            alpha = tl.exp(m_i-m_i_new)
+            p = tl.exp(qk-m_i_new)
+            acc = acc*alpha
+            l_i = l_i*alpha
+            
+            for i in range(BLOCK_N):
+                token_idx = token_start+i
+                if token_idx < context_len:
+                    block_num = token_idx//block_size
+                    block_offset = token_idx % block_size
+                    if block_num < max_num_blocks:
+                        block_tables_offset = batch_idx * max_num_blocks + block_num
+                        physical_block_idx = tl.load(block_tables_ptr+block_tables_offset)
+                        if physical_block_idx != -1:
+                            v_offset = (physical_block_idx*block_size*num_kv_heads*head_dim+block_offset*num_kv_heads*head_dim+kv_head_idx*head_dim+offs_d)
+                            v_vec = tl.load(v_cache_ptr+v_offset)
+                            mask_i = tl.arange(0,BLOCK_N)==i
+                            weight = tl.sum(tl.where(mask_i,p,0.0))
+                            acc = acc + weight * v_vec
+                            l_i = l_i + weight
+                        
+            m_i = m_i_new
+    # 最终结果
+    output = acc/l_i
+    # 输出
+    # (batch_size,num_heads,head_dim)
+    output_offset = batch_idx*num_heads*head_dim+head_idx*head_dim+offs_d
+    tl.store(output_ptr+output_offset,output)
 
 
 def paged_attention_decode(
@@ -285,13 +345,16 @@ def paged_attention_decode(
     # v_cache: (num_blocks, block_size, num_kv_heads, head_dim)
     # block_tables: (batch_size, max_num_blocks)
     # context_lens: (batch_size,)
+    # batch_size: 正在同时进行decode的请求数，num_blocks: 全局物理kvcache池子
+    # max_num_tokens: 最长的序列使用的block长度
+    # context_lens: 记录每个序列的实际长度
     batch_size = query.shape[0]
     max_num_blocks = block_tables.shape[1]
     
     query = query.contiguous()
     output = torch.empty_like(query)
     BLOCK_N = 64 if head_dim <= 128 else 32
-    
+    # grid dim0: 同时进行decode的序列的数量，dim1: 头数量
     grid = (batch_size, num_heads)
     
     paged_attention_decode_kernel[grid](
