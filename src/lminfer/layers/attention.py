@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import triton.language as tl
 import triton
-
+from lminfer.utils import get_context
 
 @triton.jit
 def store_kvcache_kernel(
@@ -253,7 +253,7 @@ def paged_attention_decode_kernel(
     kv_head_idx = head_idx // (num_heads // num_kv_heads)
     
     context_len = tl.load(context_lens_ptr + batch_idx)
-    assert tl.min(context_len)>0
+    assert context_len>0
     offs_d = tl.arange(0,head_dim)
     
     # query: (batch_size,num_heads,head_dim)
@@ -381,14 +381,39 @@ class Attention(nn.Module):
     def __init__(self, num_heads, head_dim, scale, num_kv_heads, block_size):
         super().__init__()
         self.num_heads = num_heads
-        self, head_dim = head_dim
+        self.head_dim = head_dim
         self.scale = scale
         self.num_kv_heads = num_kv_heads or num_heads
         self.block_size = block_size
         self.k_cache = self.v_cache = torch.tensor([])
 
-    def forward(self, q, k, v):
-        pass
+    def forward(self, q:torch.Tensor, k:torch.Tensor, v:torch.Tensor):
+        # q:(num_tokens,num_heads,head_dim)
+        # kv: (num_tokens,num_kv_heads,head_dim)
+        context = get_context()
+        k_cache , v_cache = self.k_cache,self.v_cache
+        
+        if k_cache.numel() >0 and v_cache.numel() >0 and context.slot_mapping is not None:
+            if k.dim()==4:
+                # 这条路径不太可能走
+                # batch_size, num_tokens, num_kv_heads, head_dim
+                B,N,num_kv_heads,head_dim = k.shape
+                k_to_store = k.reshape(B*N,num_kv_heads,head_dim).contiguous()
+                v_to_store = v.reshape(B*N,num_kv_heads,head_dim).contiguous()
+            else:
+                k_to_store = k.contiguous()
+                v_to_store = v.contiguous()
+                
+            store_kvcache(k_to_store,v_to_store,k_cache,v_cache,context.slot_mapping,self.block_size)
+        scale = self.scale /( self.head_dim**0.5)
+        if context.is_prefill:
+            cu_seqlens = context.cu_seqlens_q
+            assert cu_seqlens is not None
+            o = flash_attention_prefill(q,k,v,cu_seqlens,scale,self.num_heads,self.num_kv_heads,self.head_dim)
+            # o: (num_tokens,num_heads,head_dim)->(num_tokens,num_heads*head_dim)
+            return o.reshape(o.shape[0],self.num_heads*self.head_dim)
+        else:
+            o=paged_attention_decode(q,k_cache,v_cache,context.block_tables,context.context_lens,scale,self.num_heads,self.num_kv_heads,self.head_dim,self.block_size)
 
 
 if __name__ == "__main__":
