@@ -3,7 +3,7 @@ import torch.nn as nn
 
 class SamplerLayer(nn.Module):
     def __init__(self):
-        super().init()
+        super().__init__()
         
     def forward(self,logits,temperature):
         # logits: batch_size, num_words
