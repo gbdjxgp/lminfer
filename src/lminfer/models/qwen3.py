@@ -2,7 +2,7 @@ from lminfer.layers import *
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-
+from lminfer.utils import get_context
 
 class Qwen3Attention(nn.Module):
     def __init__(
@@ -155,7 +155,6 @@ class Qwen3DecoderLayer(nn.Module):
         else:
             residual=x
             x = self.input_layernorm(x)
-        from lminfer.utils import get_context
         context = get_context()
         if context.is_prefill and context.cu_seqlens_q is not None:
             # prefill, batched
