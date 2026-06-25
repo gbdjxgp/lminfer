@@ -7,11 +7,12 @@ import torch.nn.functional as F
 
 class VocabParallelEmbedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim):
+        super().__init__()
         self.tp_size = dist.get_world_size()
         self.tp_rank = dist.get_rank()
-        # 总共的此表大小
+        # 总共的词表大小
         self.num_embeddings = num_embeddings
-        # pad之后的此表大小，可以被tp_size整除
+        # pad之后的词表大小，可以被tp_size整除
         self.padded_num_embeddings = (
             (num_embeddings + self.tp_size - 1) // self.tp_size * self.tp_size
         )

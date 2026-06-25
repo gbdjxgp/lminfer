@@ -20,7 +20,7 @@ class RMSNorm(nn.Module):
 
     def residual_rms_forward(self, x, residual):
         x = x + residual
-        return self.rms_forward(x)
+        return self.rms_forward(x),x
 
     def forward(self, x, residual=None):
         if residual is not None:

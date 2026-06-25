@@ -2,7 +2,7 @@ from lminfer.layers import *
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from lminfer.utils import get_context
+from lminfer.utils import get_context, set_context
 
 class Qwen3Attention(nn.Module):
     def __init__(
@@ -163,11 +163,12 @@ class Qwen3DecoderLayer(nn.Module):
             for i in range(len(cu_seqlens)-1):
                 seq_len = cu_seqlens[i+1]-cu_seqlens[i]
                 positions.extend(range(seq_len))
-                positions = torch.tensor(positions,dtype=torch.long,device=x.device)
+            positions = torch.tensor(positions,dtype=torch.long,device=x.device)
         elif context.is_prefill:
-            # single sequence prefill
-            positions = torch.arange(x.size(0),device=x.device)
+            # B,S,D/S,D
+            positions = torch.arange(x.size(-2),device=x.device)
         else:
+            # decode,直接传每一个seq的最后一个位置即可
             positions = context.context_lens-1
             
         x = self.self_attn(x,positions=positions)
@@ -221,7 +222,7 @@ class Qwen3Model(nn.Module):
         for layer in self.layers:
             x,residual = layer(x,residual)
             x,_=self.norm(x,residual)
-            return x
+        return x
         
         
 class Qwen3ForCasuallLM(nn.Module):
@@ -279,3 +280,26 @@ class Qwen3ForCasuallLM(nn.Module):
     def compute_logits(self,hidden_states):
         logits = self.lm_head(hidden_states)
         return logits
+
+
+if __name__ == "__main__":
+    if dist.is_available() and not dist.is_initialized():
+        dist.init_process_group(
+            backend="gloo",
+            init_method="tcp://127.0.0.1:29500",
+            rank=0,
+            world_size=1,
+        )
+    model = Qwen3ForCasuallLM(
+        vocab_size=50257,
+        hidden_size=768,
+        num_heads=12,
+        head_dim=64,
+        intermediate_size=3072,
+        num_layers=2,
+    ).npu()
+    set_context(True, context_lens=16)
+    # B,S格式输入
+    input_ids = torch.randint(0, 50257, (2, 16)).npu()
+    output = model(input_ids)
+    print(output)

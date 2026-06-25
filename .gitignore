@@ -1,3 +1,6 @@
 *.egg-info
 build/
 *_ref*
+*.pyc
+torch_compile_debug
+.vscode
