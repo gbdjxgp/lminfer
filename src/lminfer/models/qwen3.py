@@ -65,19 +65,10 @@ class Qwen3Attention(nn.Module):
         
     def forward(self,x,positions):
         qkv = self.qkv_projection(x)
-        
         q,k,v = qkv.split([self.q_size,self.kv_size,self.kv_size],dim=-1)
-        
-        if q.dim()==2:
-            q = q.view(-1,self.num_heads,self.head_dim)
-            k = k.view(-1,self.num_kv_heads,self.head_dim)
-            v = v.view(-1,self.num_kv_heads,self.head_dim)
-            
-        else:
-            B,N,_ = q.shape
-            q = q.view(B,N,self.num_heads,self.head_dim)
-            k = k.view(B,N,self.num_kv_heads,self.head_dim)
-            v = v.view(B,N,self.num_kv_heads,self.head_dim)
+        q = q.view(-1,self.num_heads,self.head_dim)
+        k = k.view(-1,self.num_kv_heads,self.head_dim)
+        v = v.view(-1,self.num_kv_heads,self.head_dim)
             
         if self.qkv_bias is False:
             q = self.q_norm(q)
@@ -298,8 +289,12 @@ if __name__ == "__main__":
         intermediate_size=3072,
         num_layers=2,
     ).npu()
-    set_context(True, context_lens=16)
-    # B,S格式输入
-    input_ids = torch.randint(0, 50257, (2, 16)).npu()
-    output = model(input_ids)
-    print(output)
+    model.eval()
+    with torch.inference_mode():
+        # TODO:support cu_seqlen_k,max_seqlen_q
+        set_context(True, cu_seqlens_q=torch.tensor([0,16]).npu())
+        # B,S格式输入
+        input_ids = torch.randint(0, 50257, (16,)).npu()
+        print(input_ids.shape)
+        output = model(input_ids)
+    print(output.shape)

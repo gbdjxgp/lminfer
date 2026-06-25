@@ -192,7 +192,7 @@ def flash_attention_prefill(
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
-    output = torch.empty_like(q)
+    output = torch.empty(q.shape, device=q.device, dtype=q.dtype)
 
     if head_dim <= 64:
         BLOCK_M = 64
@@ -394,38 +394,30 @@ class Attention(nn.Module):
         k_cache , v_cache = self.k_cache,self.v_cache
         
         if k_cache.numel() >0 and v_cache.numel() >0 and context.slot_mapping is not None:
-            if k.dim()==4:
-                # 这条路径不太可能走
-                # batch_size, num_tokens, num_kv_heads, head_dim
-                B,N,num_kv_heads,head_dim = k.shape
-                k_to_store = k.reshape(B*N,num_kv_heads,head_dim).contiguous()
-                v_to_store = v.reshape(B*N,num_kv_heads,head_dim).contiguous()
-            else:
-                k_to_store = k.contiguous()
-                v_to_store = v.contiguous()
-                
-            store_kvcache(k_to_store,v_to_store,k_cache,v_cache,context.slot_mapping,self.block_size)
+            # 有kvcache池子且slot_mapping非空
+            k = k.contiguous()
+            v = v.contiguous()
+            store_kvcache(k,v,k_cache,v_cache,context.slot_mapping,self.block_size)
         scale = self.scale /( self.head_dim**0.5)
         if context.is_prefill:
-            cu_seqlens = context.cu_seqlens_q
-            assert cu_seqlens is not None
-            o = flash_attention_prefill(q,k,v,cu_seqlens,scale,self.num_heads,self.num_kv_heads,self.head_dim)
+            # TODO: 实现prefix cache
+            o = flash_attention_prefill(q,k,v,context.cu_seqlens_q,scale,self.num_heads,self.num_kv_heads,self.head_dim)
             # o: (num_tokens,num_heads,head_dim)->(num_tokens,num_heads*head_dim)
             return o.reshape(o.shape[0],self.num_heads*self.head_dim)
         else:
+            # decode
             o=paged_attention_decode(q,k_cache,v_cache,context.block_tables,context.context_lens,scale,self.num_heads,self.num_kv_heads,self.head_dim,self.block_size)
 
 
 if __name__ == "__main__":
-    batch_size = 2
     num_heads = 4
     num_kv_heads = 2
     head_dim = 16
     seq_len = 10
 
-    q = torch.randn(batch_size, seq_len, num_heads * head_dim).npu()
-    k = torch.randn(batch_size, seq_len, num_kv_heads * head_dim).npu()
-    v = torch.randn(batch_size, seq_len, num_kv_heads * head_dim).npu()
+    q = torch.randn(seq_len, num_heads,head_dim).npu()
+    k = torch.randn(seq_len, num_kv_heads,head_dim).npu()
+    v = torch.randn(seq_len, num_kv_heads,head_dim).npu()
 
     cu_seqlens = torch.tensor([0, 5, 10], dtype=torch.int32).npu()
 

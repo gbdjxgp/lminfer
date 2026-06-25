@@ -1,5 +1,5 @@
 import torch
-from torch.multiprocessing import get_context
+from lminfer.utils import get_context
 import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F

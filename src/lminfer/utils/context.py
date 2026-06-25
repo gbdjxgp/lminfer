@@ -23,12 +23,19 @@ def reset_context():
     
 def set_context(
     is_prefill,
+    # prefill用
     cu_seqlens_q=None,
+    # TODO: To be supported
     cu_seqlens_k=None,
+    # TODO: to be supported
     max_seqlen_q=0,
+    # TODO: to be supported
     max_seqlen_k=0,
+    # kvcache用
     slot_mapping=None,
+    # context_lens,decode时候的增量位置，由于decode的时候长度为num_seqs,并非seq_len,因此需要标记每个seq的长度
     context_lens=None,
+    # decode用
     block_tables=None
 ):
     global _context
