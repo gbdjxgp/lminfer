@@ -1,16 +1,27 @@
 import torch.nn as nn
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
+from lminfer.utils import deviceinfo
+
+
+def divide(numerator, denominator):
+    assert numerator % denominator == 0
+    return numerator // denominator
 
 
 class LinearBase(nn.Module):
-    def __init__(self, input_size, output_size, bias=True, tp_dim=0):
-        super(LinearBase, self).__init__()
-        # self.tp_dim = tp_dim
-        # FIXME: This assumes torch.distributed has already been initialized.
-        # If not, get_world_size/get_rank will raise instead of falling back to single-process execution.
-        self.tp_size = dist.get_world_size()
-        self.tp_rank = dist.get_rank()
+    def __init__(
+        self,
+        input_size: int,
+        output_size: int,
+        bias: bool = True,
+        tp_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.tp_dim = tp_dim
+        self.tp_size = deviceinfo.tp_size
+        self.tp_rank = deviceinfo.tp_rank
         self.weight = nn.Parameter(torch.empty(output_size, input_size))
         self.weight.weight_loader = self.weight_loader
         if bias:
@@ -20,107 +31,123 @@ class LinearBase(nn.Module):
             self.register_parameter("bias", None)
 
     def forward(self):
-        raise NotImplementedError("Forward method should be implemented in subclass")
+        raise NotImplementedError
 
 
 class ColumnParallelLinear(LinearBase):
-    def __init__(self, input_size, output_size, bias=True):
-        tp_size = dist.get_world_size()
-        assert (
-            output_size % tp_size == 0
-        ), "output_size must be divisible by the number of processes"
-        super(ColumnParallelLinear, self).__init__(
-            input_size, output_size // tp_size, bias, tp_dim=0
-        )
+    def __init__(
+        self,
+        input_size: int,
+        output_size: int,
+        bias: bool = False,
+    ) -> None:
+        tp_size = deviceinfo.tp_size
+        super().__init__(input_size, divide(output_size, tp_size), bias, tp_dim=0)
 
-    def weight_loader(self, param, loaded_weights):
+    def weight_loader(self, param: nn.parameter, loaded_weights: torch.Tensor):
         param_data = param.data
-        full_data_out_features = loaded_weights.size(0)
-        shard_size = full_data_out_features // self.tp_size
-        assert shard_size == param_data.size(
-            0
-        ), "Shard size does not match parameter size"
-        start_index = self.tp_rank * shard_size
-        slided_weight = loaded_weights.narrow(0, start_index, shard_size)
-        param_data.copy_(slided_weight)
+        shard_size = param.size(self.tp_dim)
+        start_idx = self.tp_rank * shard_size
+        loaded_weight = loaded_weights.narrow(0, start_idx, shard_size)
+        param_data.copy_(loaded_weight)
 
-    def forward(self, x):
-        return nn.functional.linear(x, self.weight, self.bias)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.linear(x, self.weight, self.bias)
 
 
 class MergedColumnParallelLinear(ColumnParallelLinear):
-    def __init__(self, input_size, output_sizes, bias=True):
+    def __init__(
+        self,
+        input_size: int,
+        output_sizes: list[int],
+        bias: bool = False,
+    ) -> None:
         self.output_sizes = output_sizes
         super().__init__(input_size, sum(output_sizes), bias)
 
-    def weight_loader(self, param, loaded_weights, loaded_weight_id):
+    def weight_loader(
+        self, param: nn.Parameter, loaded_weights: torch.Tensor, loaded_shard_id: int
+    ):
         param_data = param.data
-        offset = sum(self.output_sizes[:loaded_weight_id]) // self.tp_size
-        shard_size = self.output_sizes[loaded_weight_id] // self.tp_size
-        param_data = param_data.narrow(0, offset, shard_size)
-        loaded_weights_start_index = self.tp_rank * shard_size
-        shard_weights = loaded_weights.narrow(0, loaded_weights_start_index, shard_size)
-        param_data.copy_(shard_weights)
+        shard_offset = sum(self.output_sizes[:loaded_shard_id]) // self.tp_size
+        shard_size = self.output_sizes[loaded_shard_id] // self.tp_size
+        param_data = param_data.narrow(0, shard_offset, shard_size)
+        loaded_weight = loaded_weights.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
+        param_data.copy_(loaded_weight)
 
 
 class QKVColumnParallelLinear(ColumnParallelLinear):
-    def __init__(self, input_size, head_size, num_heads, num_kv_heads=None, bias=False):
-        tp_size = dist.get_world_size()
-        num_kv_heads = num_kv_heads or num_heads
+    def __init__(
+        self,
+        input_size: int,
+        head_size: int,
+        total_num_heads: int,
+        total_num_kv_heads: int | None = None,
+        bias: bool = False,
+    ) -> None:
+        tp_size = deviceinfo.tp_size
+        total_num_kv_heads = total_num_kv_heads or total_num_heads
         self.head_size = head_size
-        self.num_heads = num_heads // tp_size
-        self.num_kv_heads = num_kv_heads // tp_size
-        self.output_size = head_size * (self.num_heads + 2 * self.num_kv_heads)
-        super().__init__(input_size, self.output_size * tp_size, bias=bias)
 
-    def weight_loader(self, param, loaded_weights, load_weight_id):
+        self.num_heads = divide(total_num_heads, tp_size)
+        self.num_kv_heads = divide(total_num_kv_heads, tp_size)
+        output_size = (
+            self.total_num_heads + 2 * self.total_num_kv_heads
+        ) * self.head_size
+        super().__init__(input_size, output_size, bias=bias)
+
+    def weight_loader(
+        self,
+        param: nn.Parameter,
+        loaded_weights: torch.Tensor,
+        load_weight_id: int,
+    ):
         param_data = param.data
         assert load_weight_id in ["q", "k", "v"]
         if load_weight_id == "q":
-            offset = 0
+            shard_offset = 0
             shard_size = self.head_size * self.num_heads
         elif load_weight_id == "k":
-            offset = self.head_size * self.num_heads
+            # 权重顺序应该是Q-K-V,因此这里的偏移是Q的
+            shard_offset = self.head_size * self.num_heads
             shard_size = self.head_size * self.num_kv_heads
         else:
-            offset = (
+            # Q+K的偏移
+            shard_offset = (
                 self.head_size * self.num_heads + self.head_size * self.num_kv_heads
             )
             shard_size = self.head_size * self.num_kv_heads
-        param_data = param.data.narrow(0, offset, shard_size)
-        load_weight_start_index = self.tp_rank * shard_size
-        param_data.copy_(loaded_weights.narrow(0, load_weight_start_index, shard_size))
+        param_data = param.data.narrow(self.tp_dim, shard_offset, shard_size)
+        loaded_weights.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
+        param_data.copy_(loaded_weights)
 
 
 class RowParallelLinear(LinearBase):
-    def __init__(self, input_size, output_size, bias=True):
-        tp_size = dist.get_world_size()
-        assert (
-            input_size % tp_size == 0
-        ), "input_size must be divisible by the number of processes"
-        super(RowParallelLinear, self).__init__(
-            input_size // tp_size, output_size, bias, tp_dim=1
-        )
+    def __init__(
+        self,
+        input_size: int,
+        output_size: int,
+        bias: bool = False,
+    ) -> None:
+        tp_size = deviceinfo.tp_size
+        super().__init__(divide(input_size, tp_size), output_size, bias, tp_dim=1)
 
-    def weight_loader(self, param, loaded_weights):
+    def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
         param_data = param.data
         if param_data.ndim == 1:
             param.data.copy_(loaded_weights)
             return
-        full_data_out_features = loaded_weights.size(1)
-        shard_size = full_data_out_features // self.tp_size
-        assert shard_size == param_data.size(
-            1
-        ), "Shard size does not match parameter size"
+        shard_size = param_data.size(self.tp_dim)
         start_index = self.tp_rank * shard_size
-        slided_weight = loaded_weights.narrow(1, start_index, shard_size)
-        param_data.copy_(slided_weight)
+        loaded_weight = loaded_weights.narrow(self.tp_dim, start_index, shard_size)
+        param_data.copy_(loaded_weight)
 
     def forward(self, x):
-        # FIXME: This adds the full bias on every rank before all_reduce.
-        # With tp_size > 1, bias will be summed tp_size times in the final result.
-        # Correct order is local matmul without bias -> all_reduce -> add bias once.
-        result = nn.functional.linear(x, self.weight, self.bias)
         if self.tp_size > 1:
-            dist.all_reduce(result, op=dist.ReduceOp.SUM)
-        return result
+            y = F.linear(x, self.weight, None)
+            dist.all_reduce(y, op=dist.ReduceOp.SUM)
+            if self.bias:
+                y += self.bias
+        else:
+            y = F.linear(x, self.weight, self.bias)
+        return y

@@ -1,1 +1,2 @@
-from .context import set_context,get_context,reset_context
+from .context import get_context, reset_context, set_context
+from .device import deviceinfo

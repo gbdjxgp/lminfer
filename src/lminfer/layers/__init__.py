@@ -8,5 +8,5 @@ from .linear import (
     MergedColumnParallelLinear,
     QKVColumnParallelLinear,
 )
-from .rotary_embedding import RotaryEmbedding
+from .rotary_embedding import RotaryEmbedding, get_rope
 from .sampler import SamplerLayer
