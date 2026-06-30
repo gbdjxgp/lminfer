@@ -59,10 +59,9 @@ class RotaryEmbedding(nn.Module):
 
 @lru_cache(1)
 def get_rope(
-    head_size: int,
     rotary_dim: int,
     max_position: int,
     base: float,
 ):
-    rotary_emb = RotaryEmbedding(head_size, rotary_dim, max_position, base)
+    rotary_emb = RotaryEmbedding(rotary_dim, max_position, base)
     return rotary_emb

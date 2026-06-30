@@ -9,4 +9,4 @@ from .linear import (
     QKVColumnParallelLinear,
 )
 from .rotary_embedding import RotaryEmbedding, get_rope
-from .sampler import SamplerLayer
+from .sampler import Sampler

@@ -9,6 +9,13 @@ import torch
 
 class DeviceInfo:
     def __init__(self) -> None:
+        if dist.is_available() and not dist.is_initialized():
+            dist.init_process_group(
+                backend="gloo",
+                init_method="tcp://127.0.0.1:29500",
+                rank=0,
+                world_size=1,
+            )
         self._cuda_available = self.is_cuda_available()
         self._npu_available = self.is_npu_available()
         self._hip_available = self.is_hip_available()

@@ -91,9 +91,7 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
 
         self.num_heads = divide(total_num_heads, tp_size)
         self.num_kv_heads = divide(total_num_kv_heads, tp_size)
-        output_size = (
-            self.total_num_heads + 2 * self.total_num_kv_heads
-        ) * self.head_size
+        output_size = (total_num_heads + 2 * total_num_kv_heads) * self.head_size
         super().__init__(input_size, output_size, bias=bias)
 
     def weight_loader(
