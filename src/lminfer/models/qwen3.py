@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
-# from transformers.models.qwen3 import Qwen3Config
+from transformers.models.qwen3 import Qwen3Config
+from transformers import AutoConfig
 from lminfer.layers.activation import SiluAndMul
 from lminfer.layers.attention import Attention
 from lminfer.layers.layernorm import RMSNorm
@@ -15,23 +16,22 @@ import torch
 import torch.nn as nn
 from lminfer.utils import deviceinfo, set_context
 
-
-@dataclass
-class Qwen3Config:
-    vocab_size: int = 151936
-    num_hidden_layers: int = 32
-    hidden_size: int = 4096
-    num_attention_heads: int = 32
-    num_key_value_heads: int | None = None
-    max_position_embeddings: int = 16384
-    rms_norm_eps: float = 1e-6
-    attention_bias: bool = True  # qkv_bias
-    head_dim: int | None = None
-    rope_theta: int = 1000000  # base
-    rope_scaling: float | None = None
-    intermediate_size: int = 4 * 1024
-    hidden_act: str = "silu"
-    tie_word_embeddings: bool = False
+# @dataclass
+# class Qwen3Config:
+#     vocab_size: int = 151936
+#     num_hidden_layers: int = 32
+#     hidden_size: int = 4096
+#     num_attention_heads: int = 32
+#     num_key_value_heads: int | None = None
+#     max_position_embeddings: int = 16384
+#     rms_norm_eps: float = 1e-6
+#     attention_bias: bool = True  # qkv_bias
+#     head_dim: int | None = None
+#     rope_theta: int = 1000000  # base
+#     rope_scaling: float | None = None
+#     intermediate_size: int = 4 * 1024
+#     hidden_act: str = "silu"
+#     tie_word_embeddings: bool = False
 
 
 class Qwen3Attention(nn.Module):
@@ -211,7 +211,7 @@ class Qwen3Model(nn.Module):
 
 
 class Qwen3ForCasuallLM(nn.Module):
-    packed_module_mapping = {
+    packed_modules_mapping = {
         "q_proj": ("qkv_proj", "q"),
         "k_proj": ("qkv_proj", "k"),
         "v_proj": ("qkv_proj", "v"),
@@ -249,14 +249,15 @@ class Qwen3ForCasuallLM(nn.Module):
 if __name__ == "__main__":
     device = deviceinfo.device()
     print(f"Detected platform={deviceinfo.platform()}, " f"device={device}")
-    config = Qwen3Config(
-        vocab_size=50257,
-        hidden_size=768,
-        num_attention_heads=12,
-        head_dim=64,
-        intermediate_size=3072,
-        num_hidden_layers=2,
-    )
+    # config = Qwen3Config(
+    #     vocab_size=50257,
+    #     hidden_size=768,
+    #     num_attention_heads=12,
+    #     head_dim=64,
+    #     intermediate_size=3072,
+    #     num_hidden_layers=2,
+    # )
+    config = AutoConfig.from_pretrained("/data2/models/Qwen3-0.6B/")
     model = Qwen3ForCasuallLM(config).to(device)
     model.eval()
     with torch.inference_mode():
@@ -271,8 +272,8 @@ if __name__ == "__main__":
         input_ids = torch.randint(0, 50257, (16,), device=device)
         positions = torch.cat(
             [
-                torch.arange(8, dtype=torch.long, device=device),
-                torch.arange(8, dtype=torch.long, device=device),
+                torch.arange(8, dtype=torch.int64, device=device),
+                torch.arange(8, dtype=torch.int64, device=device),
             ]
         )
         hidden_states = model(input_ids, positions)

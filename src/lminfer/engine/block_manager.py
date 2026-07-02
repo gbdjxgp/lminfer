@@ -61,6 +61,7 @@ class BlockManager:
         num_new_blocks = seq.num_blocks
         for i in range(seq.num_blocks - 1):
             # 这里是计算每个block的hash,计算链式hash
+            # seq.num_blocks - 1保证了最后一个可能未满的block参与计算
             token_ids = seq.block(i)
             # 第一个block的h为-1,然后依次计算当前block的hash
             h = self.compute_hash(token_ids, h)
@@ -111,6 +112,7 @@ class BlockManager:
         seq.block_table.clear()
 
     def can_append(self, seq: Sequence) -> bool:
+        # 返回值为True说明可以decode,否则不行,因为需要一个新的block但是没空闲block了
         # 如果 len(seq) % block_size == 1，说明刚 append 了一个新 token，进入了一个新 block，需要新分配 1 个 block
         # 否则len(seq) % self.block_size!=1，不需要新的block，返回False
         return len(self.free_block_ids) >= (len(seq) % self.block_size == 1)
@@ -120,12 +122,14 @@ class BlockManager:
             seq.block_table.append(self._allocate_block())
 
     def hash_blocks(self, seq: Sequence):
+        # 更新新的完整的块到哈希列表中
         start = seq.num_cached_tokens // self.block_size
         end = (seq.num_cached_tokens + seq.num_scheduled_tokens) // self.block_size
         if start == end:
             return
         h = self.blocks[seq.block_table[start - 1]].hash if start > 0 else -1
         for i in range(start, end):
+            # 注意这里的range是(start,end)，因此end取不到，自动忽略最后一个不完整的块
             block = self.blocks[seq.block_table[i]]
             token_ids = seq.block(i)
             h = self.compute_hash(token_ids, h)

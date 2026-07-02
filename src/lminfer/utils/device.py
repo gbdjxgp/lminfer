@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import cache
-from typing import Literal
 
 import torch.distributed as dist
 import torch

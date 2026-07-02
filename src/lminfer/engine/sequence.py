@@ -31,6 +31,7 @@ class Sequence:
         self.is_prefill = True
         self.block_table = []
         self.temperature = sampling_params.temperature
+        # 这个max_token指的是每个seq完成的最大token
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
 
