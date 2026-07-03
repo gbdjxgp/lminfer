@@ -24,7 +24,7 @@ class VocabParallelEmbedding(nn.Module):
         # 每个GPU维护的词表大小
         self.num_embeddings_per_partition = self.padded_num_embeddings // self.tp_size
         self.vocab_start_idx = min(
-            self.num_embeddings_per_partition * self.tp_size, self.num_embeddings
+            self.num_embeddings_per_partition * self.tp_rank, self.num_embeddings
         )
         self.vocab_end_idx = min(
             self.vocab_start_idx + self.num_embeddings_per_partition,

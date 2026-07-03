@@ -25,7 +25,7 @@ class Block:
 class BlockManager:
     def __init__(self, num_blocks: int, block_size: int):
         self.block_size = block_size
-        self.blocks: list[Block] = [Block[i] for i in range(num_blocks)]
+        self.blocks: list[Block] = [Block(i) for i in range(num_blocks)]
         self.hash_to_block_id: dict[int, int] = dict()
         self.free_block_ids: deque[int] = deque(range(num_blocks))
         self.used_block_ids: set[int] = set()

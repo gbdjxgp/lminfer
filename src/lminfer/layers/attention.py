@@ -267,7 +267,8 @@ def flash_attn_varlen_func(
     if head_dim <= 64:
         BLOCK_M, BLOCK_N = 64, 64
     elif head_dim <= 128:
-        BLOCK_M, BLOCK_N = 32, 32
+        # Ascend Triton crashes for the 32x32 schedule at head_dim=128.
+        BLOCK_M, BLOCK_N = 32, 16
     else:
         BLOCK_M, BLOCK_N = 16, 16
 

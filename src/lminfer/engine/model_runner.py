@@ -11,7 +11,8 @@ from lminfer.layers.sampler import Sampler
 from lminfer.utils.context import set_context, get_context, reset_context
 from lminfer.utils.loader import load_model
 from lminfer.utils.device import deviceinfo
-from torch_npu.contrib import transfer_to_npu
+
+# from torch_npu.contrib import transfer_to_npu
 
 
 class ModelRunner:
@@ -30,7 +31,7 @@ class ModelRunner:
         self.event = event
         self.device = deviceinfo.device(rank)
 
-        torch.cuda.set_device(rank)
+        deviceinfo.backend.set_device(rank)
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.dtype)
         torch.set_default_device(self.device)
@@ -41,7 +42,7 @@ class ModelRunner:
         self.allocate_kv_cache()
         if not self.enforce_eager:
             # 图模式
-            self.capture_cudagraph()
+            self.capture_backendgraph()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
@@ -86,26 +87,26 @@ class ModelRunner:
                 break
 
     def warmup_model(self):
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
+        deviceinfo.backend.empty_cache()
+        deviceinfo.backend.reset_peak_memory_stats()
         max_num_batched_tokens, max_model_len = (
             self.config.max_num_batched_tokens,
             self.config.max_model_len,
         )
         assert max_model_len < max_num_batched_tokens
         # 固定2个seqs前向预热，每个seq长度为max_num_batched_tokens//2
-        seqs = [Sequence([0] * max_num_batched_tokens // 2) for _ in range(2)]
+        seqs = [Sequence([0] * (max_num_batched_tokens // 2)) for _ in range(2)]
         for seq in seqs:
             seq.num_scheduled_tokens = max_num_batched_tokens // 2
         self.run(seqs, True)
-        torch.cuda.empty_cache()
+        deviceinfo.backend.empty_cache()
 
     def allocate_kv_cache(self):
         config, hf_config = self.config, self.config.hf_config
-        free, total = torch.cuda.mem_get_info()
+        free, total = deviceinfo.backend.mem_get_info()
         used = total - free
-        peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
-        current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+        peak = deviceinfo.backend.memory_stats()["allocated_bytes.all.peak"]
+        current = deviceinfo.backend.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         head_dim = getattr(
             hf_config,
@@ -289,7 +290,7 @@ class ModelRunner:
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
 
-        torch.cuda.synchronize()
+        deviceinfo.backend.synchronize()
         dist.destroy_process_group()
 
     def prepare_sample(self, seqs: list[Sequence]):
@@ -300,7 +301,7 @@ class ModelRunner:
         return temperatures
 
     @torch.inference_mode()
-    def capture_cudagraph(self):
+    def capture_backendgraph(self):
         config = self.config
         hf_config = config.hf_config
         # 最大512个seqs
@@ -320,7 +321,7 @@ class ModelRunner:
         self.graph_pool = None
 
         for bs in reversed(self.graph_bs):
-            graph = torch.cuda.CUDAGraph()
+            graph = deviceinfo.graph_cls()
             # 只会捕获decode阶段
             set_context(
                 False,
@@ -330,14 +331,14 @@ class ModelRunner:
             )
             # 预热，前向之后返回的数据应该是(total_tokens, hidden_size)
             outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
-            with torch.cuda.graph(graph, self.graph_pool):
+            with deviceinfo.backend.graph(graph, self.graph_pool):
                 # 捕获图，把前bs行填入buffer中
                 outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
             if self.graph_pool is None:
                 # 只要不是并发replay/输出之间相互依赖, 这种操作可以减少显存占用
                 self.graph_pool = graph.pool()
             self.graphs[bs] = graph
-            torch.cuda.synchronize()
+            deviceinfo.backend.synchronize()
             reset_context()
         # 保存对应图的输入输出地址
         self.graph_vars = dict(

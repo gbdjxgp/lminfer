@@ -21,9 +21,17 @@ npu = [
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
 [[tool.uv.index]]
-name = "ascend"
-url = "https://mirrors.huaweicloud.com/ascend/repos/pypi/"
+name = "pypi"
+url = "https://pypi.org/simple"
 default = false
 
 [[tool.uv.index]]
@@ -31,8 +39,7 @@ name = "tsinghua"
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = false
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[[tool.uv.index]]
+name = "ascend"
+url = "https://mirrors.huaweicloud.com/ascend/repos/pypi/"
+default = false

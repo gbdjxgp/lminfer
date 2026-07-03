@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import cache
+import os
 
 import torch.distributed as dist
 import torch
@@ -11,7 +12,7 @@ class DeviceInfo:
         if dist.is_available() and not dist.is_initialized():
             dist.init_process_group(
                 backend="gloo",
-                init_method="tcp://127.0.0.1:29500",
+                init_method=f"tcp://127.0.0.1:{os.getenv('MASTER_PORT', '29500')}",
                 rank=0,
                 world_size=1,
             )
@@ -21,6 +22,15 @@ class DeviceInfo:
         self._platform = self.platform()
         self.tp_size = dist.get_world_size()
         self.tp_rank = dist.get_rank()
+        if self._platform == "cuda":
+            self.backend = torch.cuda
+            self.graph_cls = torch.cuda.CUDAGraph
+        elif self._platform == "npu":
+            self.backend = torch.npu
+            self.graph_cls = torch.npu.NPUGraph
+        else:
+            self.backend = None
+            self.graph_cls = None
 
     @staticmethod
     @cache

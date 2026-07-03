@@ -44,7 +44,7 @@ class Qwen3Attention(nn.Module):
         head_dim: int | None = None,
         rms_norm_eps: float = 1e-6,
         qkv_bias=False,
-        rope_theta: float = 10000,
+        # rope_theta: float = 10000,
         rope_scaling: dict | None = None,
     ) -> None:
         super().__init__()
@@ -73,8 +73,8 @@ class Qwen3Attention(nn.Module):
         if not self.qkv_bias:
             self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
             self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
-        if isinstance(rope_scaling, dict):
-            rope_theta = rope_scaling.get("rope_theta", rope_theta)
+        # if isinstance(rope_scaling, dict):
+        rope_theta = rope_scaling["rope_theta"]
         self.rotary_emb = get_rope(
             rotary_dim=self.head_dim,
             max_position=max_position,
@@ -155,7 +155,7 @@ class Qwen3DecoderLayer(nn.Module):
             rms_norm_eps=config.rms_norm_eps,
             qkv_bias=config.attention_bias,
             head_dim=config.head_dim,
-            rope_theta=config.rope_theta,
+            # rope_theta=config.rope_theta,
             rope_scaling=config.rope_scaling,
         )
         self.post_attention_layernorm = RMSNorm(
@@ -210,7 +210,7 @@ class Qwen3Model(nn.Module):
         return x
 
 
-class Qwen3ForCasuallLM(nn.Module):
+class Qwen3ForCausalLM(nn.Module):
     packed_modules_mapping = {
         "q_proj": ("qkv_proj", "q"),
         "k_proj": ("qkv_proj", "k"),
@@ -258,7 +258,7 @@ if __name__ == "__main__":
     #     num_hidden_layers=2,
     # )
     config = AutoConfig.from_pretrained("/data2/models/Qwen3-0.6B/")
-    model = Qwen3ForCasuallLM(config).to(device)
+    model = Qwen3ForCausalLM(config).to(device)
     model.eval()
     with torch.inference_mode():
         cu_seqlens = torch.tensor([0, 8, 16], dtype=torch.int32, device=device)
