@@ -18,6 +18,12 @@ rm -rf .venv/lib/python3.12/site-packages/triton \
         .venv/lib/python3.12/site-packages/triton-*.dist-info \
         .venv/lib/python3.12/site-packages/triton_ascend-*.dist-info
 
-uv pip install --python .venv/bin/python triton==3.5.0 --index-url https://pypi.org/simple
+uv pip install triton==3.5.0
 
-uv pip install --python .venv/bin/python triton-ascend==3.2.1 --extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
+
+uv pip install triton-ascend==3.2.1 --index-url https://pypi.org/simple --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/
+
+
+### about NPU+Vllm
+VLLM_TARGET_DEVICE=empty uv pip install -v -e .
+uv pip install -v -e . --find-links https://repo.huaweicloud.com/ascend/repos/pypi/triton-ascend/

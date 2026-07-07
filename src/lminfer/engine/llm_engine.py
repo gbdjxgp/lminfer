@@ -8,7 +8,12 @@ from lminfer.config import Config
 from lminfer.sampling_params import SamplingParams
 from lminfer.engine.sequence import Sequence
 from lminfer.engine.scheduler import Scheduler
-from lminfer.engine.model_runner import ModelRunner
+
+# from lminfer.engine.model_runner import ModelRunner
+
+# from lminfer.engine.model_runner_new import ModelRunner
+
+from lminfer.engine.npu_model_runner import NPUModelRunner as ModelRunner
 
 
 class LLMEngine:
@@ -79,6 +84,7 @@ class LLMEngine:
             total=len(prompts),
             desc="Generating",
             dynamic_ncols=True,
+            mininterval=0.5,
             disable=not use_tqdm,
         )
         if not isinstance(sampling_params, list):
@@ -88,6 +94,7 @@ class LLMEngine:
             self.add_request(prompt, sp)
         outputs = {}
         prefill_throughput = decode_throughput = 0.0
+        last_pbar_update = perf_counter()
         while not self.is_finished():
             t = perf_counter()
             # 前向一次
@@ -97,17 +104,27 @@ class LLMEngine:
                 prefill_throughput = num_tokens / (perf_counter() - t)
             else:
                 decode_throughput = -num_tokens / (perf_counter() - t)
-            # 实时显示吞吐
+            now = perf_counter()
+            if use_tqdm and now - last_pbar_update >= 0.5:
+                # tqdm postfix formatting is surprisingly expensive on fast decode loops.
+                pbar.set_postfix(
+                    {
+                        "Prefill": f"{int(prefill_throughput)}tok/s",
+                        "Decode": f"{int(decode_throughput)}tok/s",
+                    }
+                )
+                last_pbar_update = now
+            # 这里的output是已经完成的请求
+            for seq_id, token_ids in output:
+                outputs[seq_id] = token_ids
+                pbar.update(1)
+        if use_tqdm:
             pbar.set_postfix(
                 {
                     "Prefill": f"{int(prefill_throughput)}tok/s",
                     "Decode": f"{int(decode_throughput)}tok/s",
                 }
             )
-            # 这里的output是已经完成的请求
-            for seq_id, token_ids in output:
-                outputs[seq_id] = token_ids
-                pbar.update(1)
         pbar.close()
         # 处理结束,返回推理结果
         outputs = [outputs[seq_id] for seq_id in sorted(outputs.keys())]

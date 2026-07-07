@@ -92,13 +92,51 @@ class Qwen3Attention(nn.Module):
             output_size=hidden_size,
             bias=False,
         )
+        if deviceinfo.is_npu_available():
+            import vllm_ascend.ops  # noqa: F401
+            from vllm_ascend.ops.triton.triton_utils import (
+                init_device_properties_triton,
+            )
 
-    def forward(
+            init_device_properties_triton()
+            self.impl = self.npu_forward
+        else:
+            self.impl = self.native_forward
+
+    def npu_forward(
         self,
         positions: torch.Tensor,
         x: torch.Tensor,
     ):
-        q, k, v = self.qkv_proj(x).split(
+        qkv = self.qkv_proj(x)
+        if not self.qkv_bias and qkv.dtype == torch.bfloat16:
+            cos_sin_cache = self.rotary_emb.cos_sin_cache.squeeze(1)
+            if cos_sin_cache.dtype != qkv.dtype:
+                cos_sin_cache = cos_sin_cache.to(qkv.dtype)
+            q, k, v = torch.ops.vllm.qkv_rmsnorm_rope(
+                input=qkv,
+                q_weight=self.q_norm.weight,
+                k_weight=self.k_norm.weight,
+                q_hidden_size=self.q_size,
+                kv_hidden_size=self.kv_size,
+                head_dim=self.head_dim,
+                eps=self.q_norm.eps,
+                q_bias=None,
+                k_bias=None,
+                cos_sin_cache=cos_sin_cache,
+                positions=positions,
+            )
+            q = q.view(-1, self.num_heads, self.head_dim)
+            k = k.view(-1, self.num_kv_heads, self.head_dim)
+            v = v.view(-1, self.num_kv_heads, self.head_dim)
+        else:
+            q, k, v = self.native_qkv(positions, qkv)
+        o = self.attention(q, k, v)
+        o = self.o_proj(o.flatten(1, -1))
+        return o
+
+    def native_qkv(self, positions: torch.Tensor, qkv: torch.Tensor):
+        q, k, v = qkv.split(
             [self.q_size, self.kv_size, self.kv_size],
             dim=-1,
         )
@@ -109,9 +147,24 @@ class Qwen3Attention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
         q, k = self.rotary_emb(positions, q, k)
+        return q, k, v
+
+    def native_forward(
+        self,
+        positions: torch.Tensor,
+        x: torch.Tensor,
+    ):
+        q, k, v = self.native_qkv(positions, self.qkv_proj(x))
         o = self.attention(q, k, v)
         o = self.o_proj(o.flatten(1, -1))
         return o
+
+    def forward(
+        self,
+        positions: torch.Tensor,
+        x: torch.Tensor,
+    ):
+        return self.impl(positions, x)
 
 
 class Qwen3MLP(nn.Module):

@@ -17,6 +17,7 @@ class Sampler(nn.Module):
         logits = logits / temperature.unsqueeze(-1)
         # probs: batch_size, vocab_size
         probs = torch.softmax(logits, dim=-1)
+        # TODO: 实现GREEDY采样
         sample_tokens = probs.div(
             torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)
         ).argmax(dim=-1)

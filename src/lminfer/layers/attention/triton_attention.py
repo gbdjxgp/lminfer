@@ -5,10 +5,11 @@ import torch.nn.functional as F
 import triton.language as tl
 import triton
 from lminfer.utils import get_context, deviceinfo
+from .attention import AttentionBackend
 
 
 @triton.jit
-def store_kvcache_kernel(
+def _store_kvcache_kernel(
     key_ptr,
     key_stride,
     value_ptr,
@@ -40,7 +41,7 @@ def store_kvcache_kernel(
     tl.store(v_cache_ptr + cache_offsets, value)
 
 
-def store_kvcache(
+def store_kvcache_kernel(
     key: torch.Tensor,
     value: torch.Tensor,
     k_cache: torch.Tensor,
@@ -55,7 +56,7 @@ def store_kvcache(
     assert k_cache.stride(1) == D and v_cache.stride(1) == D
     assert slot_mapping.numel() == TOTAL_TOKENS
     grid = (TOTAL_TOKENS,)
-    store_kvcache_kernel[grid](
+    _store_kvcache_kernel[grid](
         key,
         key.stride(0),
         value,
@@ -65,6 +66,16 @@ def store_kvcache(
         slot_mapping,
         D,
     )
+
+
+def store_kvcache(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+):
+    store_kvcache_kernel(key, value, k_cache, v_cache, slot_mapping)
 
 
 @triton.jit
@@ -499,7 +510,7 @@ def flash_attn_with_kvcache(
     return output
 
 
-class Attention(nn.Module):
+class TritonAttentionBackend(AttentionBackend):
     def __init__(
         self,
         num_heads: int,
@@ -507,13 +518,7 @@ class Attention(nn.Module):
         scale: float,
         num_kv_heads: int | None = None,
     ):
-        super().__init__()
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-        self.scale = scale
-        self.num_kv_heads = num_kv_heads or num_heads
-        self.k_cache = torch.tensor([])
-        self.v_cache = torch.tensor([])
+        super().__init__(num_heads, head_dim, scale, num_kv_heads)
 
     def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         # q:(total_tokens, num_heads, head_dim)
@@ -522,7 +527,7 @@ class Attention(nn.Module):
         k_cache, v_cache = self.k_cache, self.v_cache
 
         if k_cache.numel() and v_cache.numel():
-            store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+            store_kvcache_kernel(k, v, k_cache, v_cache, context.slot_mapping)
         if context.is_prefill:
             # TODO: 实现prefix cache,这里的注意力计算也应该是有问题的
             o = flash_attn_varlen_func(

@@ -4,3 +4,4 @@ build/
 *.pyc
 torch_compile_debug
 .vscode
+*.whl

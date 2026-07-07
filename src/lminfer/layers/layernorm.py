@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from lminfer.utils import deviceinfo
 
 
 class RMSNorm(nn.Module):
@@ -12,6 +13,24 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(hidden_size))
+
+        if deviceinfo.is_npu_available():
+            import torch_npu
+
+            def npu_forward(
+                x: torch.Tensor,
+                residual: torch.Tensor | None = None,
+            ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+                if residual is None:
+                    return torch_npu.npu_rms_norm(x, self.weight, self.eps)[0]
+                x, _, residual = torch_npu.npu_add_rms_norm(
+                    x, residual, self.weight, self.eps
+                )
+                return x, residual
+
+            self.impl = npu_forward
+        else:
+            self.impl = self.native_forward
 
     @torch.compile
     def rms_forward(
@@ -39,7 +58,7 @@ class RMSNorm(nn.Module):
         x = x.to(orig_dtype).mul_(self.weight)
         return x, residual
 
-    def forward(
+    def native_forward(
         self,
         x: torch.Tensor,
         residual: torch.Tensor | None = None,
@@ -48,3 +67,10 @@ class RMSNorm(nn.Module):
             return self.rms_forward(x)
         else:
             return self.add_rms_forward(x, residual)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        residual: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        return self.impl(x, residual)

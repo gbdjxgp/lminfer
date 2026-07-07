@@ -2,9 +2,14 @@ import os
 import time
 from random import randint, seed
 
-from lminfer import LLM, SamplingParams
-
-# from vllm import LLM, SamplingParams
+ENGINE = os.getenv("ENGINE", "lminfer").lower()
+if ENGINE == "lminfer":
+    print("use lminfer")
+    from lminfer import LLM, SamplingParams
+elif ENGINE == "vllm":
+    from vllm import LLM, SamplingParams
+else:
+    raise ValueError(f"Unsupported ENGINE={ENGINE!r}")
 
 
 def main():
@@ -12,7 +17,6 @@ def main():
     num_seqs = 256
     max_input_len = 1024
     max_ouput_len = 1024
-
     path = "/data2/models/Qwen3-0.6B/"
     llm = LLM(path, enforce_eager=False, max_model_len=4096)
 
@@ -26,9 +30,6 @@ def main():
         )
         for _ in range(num_seqs)
     ]
-    # uncomment the following line for vllm
-    # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
-
     llm.generate(["Benchmark: "], SamplingParams())
     t = time.time()
     llm.generate(prompt_token_ids, sampling_params, use_tqdm=True)
