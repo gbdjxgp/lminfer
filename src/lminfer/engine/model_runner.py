@@ -11,7 +11,7 @@ from lminfer.layers.attention import Attention
 from lminfer.layers.sampler import Sampler
 from lminfer.utils.context import set_context, get_context, reset_context
 from lminfer.utils.loader import load_model
-from lminfer.utils.device import deviceinfo
+from lminfer.utils.device import deviceinfo, DeviceInfo
 
 
 class ModelRunner:
@@ -28,6 +28,8 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
+        assert deviceinfo is None
+        deviceinfo = DeviceInfo(self, rank, self.world_size)
         self.device = deviceinfo.device(rank)
 
         deviceinfo.backend.set_device(rank)

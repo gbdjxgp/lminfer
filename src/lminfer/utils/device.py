@@ -8,13 +8,13 @@ import torch
 
 
 class DeviceInfo:
-    def __init__(self) -> None:
+    def __init__(self, rank, world_size) -> None:
         if dist.is_available() and not dist.is_initialized():
             dist.init_process_group(
                 backend="gloo",
                 init_method=f"tcp://127.0.0.1:{os.getenv('MASTER_PORT', '29500')}",
-                rank=0,
-                world_size=1,
+                rank=rank,
+                world_size=world_size,
             )
         self._cuda_available = self.is_cuda_available()
         self._npu_available = self.is_npu_available()
@@ -22,6 +22,8 @@ class DeviceInfo:
         self._platform = self.platform()
         self.tp_size = dist.get_world_size()
         self.tp_rank = dist.get_rank()
+        assert self.tp_size == world_size
+        assert self.tp_rank == rank
         if self._platform == "cuda":
             self.backend = torch.cuda
             self.graph_cls = torch.cuda.CUDAGraph
@@ -73,4 +75,4 @@ class DeviceInfo:
         return torch.device(self.platform(deviceId=deviceId))
 
 
-deviceinfo = DeviceInfo()
+deviceinfo = None
