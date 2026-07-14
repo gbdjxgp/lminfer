@@ -14,23 +14,19 @@ else:
 
 def main():
     seed(0)
-    num_seqs = int(os.getenv("BENCH_NUM_SEQS", "8"))
-    max_input_len = int(os.getenv("BENCH_MAX_INPUT_LEN", "256"))
-    max_ouput_len = int(os.getenv("BENCH_MAX_OUTPUT_LEN", "64"))
-    min_input_len = min(100, max_input_len)
-    min_output_len = min(100, max_ouput_len)
-    path = os.getenv("MODEL_PATH", "/data2/models/Qwen3-0.6B/")
+    num_seqs = 256
+    max_input_len = 1024
+    max_ouput_len = 1024
+    path = "/data2/models/Qwen3-0.6B/"
     llm = LLM(path, enforce_eager=False, max_model_len=4096)
 
     prompt_token_ids = [
-        [randint(0, 10000) for _ in range(randint(min_input_len, max_input_len))]
+        [randint(0, 10000) for _ in range(randint(100, max_input_len))]
         for _ in range(num_seqs)
     ]
     sampling_params = [
         SamplingParams(
-            temperature=0.6,
-            ignore_eos=True,
-            max_tokens=randint(min_output_len, max_ouput_len),
+            temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)
         )
         for _ in range(num_seqs)
     ]
