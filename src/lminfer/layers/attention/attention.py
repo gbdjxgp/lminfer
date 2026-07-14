@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from lminfer.utils import deviceinfo
+from lminfer.utils import device as device_module
 
 
 class AttentionBackend(nn.Module):
@@ -39,7 +39,7 @@ class Attention(nn.Module):
         num_kv_heads: int | None = None,
     ):
         super().__init__()
-        if deviceinfo.is_npu_available():
+        if device_module.deviceinfo.is_npu_available():
             from .npu_attention import NPUAttentionBackend
 
             backend_cls = NPUAttentionBackend

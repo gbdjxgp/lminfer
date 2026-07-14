@@ -14,7 +14,8 @@ from lminfer.layers.linear import (
 )
 import torch
 import torch.nn as nn
-from lminfer.utils import deviceinfo, set_context
+from lminfer.utils import set_context
+from lminfer.utils import device as device_module
 
 # @dataclass
 # class Qwen3Config:
@@ -48,7 +49,7 @@ class Qwen3Attention(nn.Module):
         rope_scaling: dict | None = None,
     ) -> None:
         super().__init__()
-        tp_size = deviceinfo.tp_size
+        tp_size = device_module.deviceinfo.tp_size
         # total_num_heads
         self.total_num_heads = num_heads
         assert self.total_num_heads % tp_size == 0
@@ -92,7 +93,7 @@ class Qwen3Attention(nn.Module):
             output_size=hidden_size,
             bias=False,
         )
-        if deviceinfo.is_npu_available():
+        if device_module.deviceinfo.is_npu_available():
             import vllm_ascend.ops  # noqa: F401
             from vllm_ascend.ops.triton.triton_utils import (
                 init_device_properties_triton,
@@ -300,8 +301,10 @@ class Qwen3ForCausalLM(nn.Module):
 
 
 if __name__ == "__main__":
-    device = deviceinfo.device()
-    print(f"Detected platform={deviceinfo.platform()}, " f"device={device}")
+    device = device_module.deviceinfo.device()
+    print(
+        f"Detected platform={device_module.deviceinfo.platform()}, " f"device={device}"
+    )
     # config = Qwen3Config(
     #     vocab_size=50257,
     #     hidden_size=768,

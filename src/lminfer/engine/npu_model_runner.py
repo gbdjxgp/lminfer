@@ -3,6 +3,7 @@ import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
+from lminfer.utils import device as device_module
 
 from lminfer.config import Config
 from lminfer.engine.sequence import Sequence
@@ -12,7 +13,6 @@ from lminfer.layers.sampler import Sampler
 from lminfer.utils.context import set_context, get_context, reset_context
 from lminfer.utils.buffer import CpuGpuBuffer
 from lminfer.utils.loader import load_model
-from lminfer.utils.device import deviceinfo
 from lminfer.engine.model_runner import ModelRunner
 
 
@@ -250,7 +250,7 @@ class NPUModelRunner(ModelRunner):
         self.graph_pool = None
 
         for bs in reversed(self.graph_bs):
-            graph = deviceinfo.graph_cls()
+            graph = device_module.deviceinfo.graph_cls()
             # 只会捕获decode阶段
             set_context(
                 False,
@@ -260,14 +260,14 @@ class NPUModelRunner(ModelRunner):
             )
             # 预热，前向之后返回的数据应该是(total_tokens, hidden_size)
             outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
-            with deviceinfo.backend.graph(graph, self.graph_pool):
+            with device_module.deviceinfo.backend.graph(graph, self.graph_pool):
                 # 捕获图，把前bs行填入buffer中
                 outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
             if self.graph_pool is None:
                 # 只要不是并发replay/输出之间相互依赖, 这种操作可以减少显存占用
                 self.graph_pool = graph.pool()
             self.graphs[bs] = graph
-            deviceinfo.backend.synchronize()
+            device_module.deviceinfo.backend.synchronize()
             reset_context()
         # 保存对应图的输入输出地址
         self.graph_vars = dict(

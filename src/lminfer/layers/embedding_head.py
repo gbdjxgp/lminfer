@@ -3,7 +3,7 @@ from lminfer.utils import get_context
 import torch.nn as nn
 import torch.distributed as dist
 import torch.nn.functional as F
-from lminfer.utils import deviceinfo
+from lminfer.utils import device as device_module
 
 
 class VocabParallelEmbedding(nn.Module):
@@ -13,8 +13,8 @@ class VocabParallelEmbedding(nn.Module):
         embedding_dim: int,
     ) -> None:
         super().__init__()
-        self.tp_size = deviceinfo.tp_size
-        self.tp_rank = deviceinfo.tp_rank
+        self.tp_size = device_module.deviceinfo.tp_size
+        self.tp_rank = device_module.deviceinfo.tp_rank
         # 总共的词表大小
         self.num_embeddings = num_embeddings
         # pad之后的词表大小，可以被tp_size整除

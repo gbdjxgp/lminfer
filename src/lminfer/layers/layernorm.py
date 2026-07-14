@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from lminfer.utils import deviceinfo
+from lminfer.utils import device as device_module
 
 
 class RMSNorm(nn.Module):
@@ -14,7 +14,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(hidden_size))
 
-        if deviceinfo.is_npu_available():
+        if device_module.deviceinfo.is_npu_available():
             import torch_npu
 
             def npu_forward(

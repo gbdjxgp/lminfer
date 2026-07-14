@@ -3,6 +3,7 @@ import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
 from multiprocessing.shared_memory import SharedMemory
+from lminfer.utils import device as device_module
 
 from lminfer.config import Config
 from lminfer.engine.sequence import Sequence
@@ -11,7 +12,7 @@ from lminfer.layers.attention import Attention
 from lminfer.layers.sampler import Sampler
 from lminfer.utils.context import set_context, get_context, reset_context
 from lminfer.utils.loader import load_model
-from lminfer.utils.device import deviceinfo, DeviceInfo
+from lminfer.utils.device import DeviceInfo
 
 
 class ModelRunner:
@@ -28,11 +29,11 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
-        assert deviceinfo is None
-        deviceinfo = DeviceInfo(self, rank, self.world_size)
-        self.device = deviceinfo.device(rank)
+        assert device_module.deviceinfo is None
+        device_module.deviceinfo = DeviceInfo(rank, self.world_size)
+        self.device = device_module.deviceinfo.device(rank)
 
-        deviceinfo.backend.set_device(rank)
+        device_module.deviceinfo.backend.set_device(rank)
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.dtype)
         torch.set_default_device(self.device)
@@ -88,8 +89,8 @@ class ModelRunner:
                 break
 
     def warmup_model(self):
-        deviceinfo.backend.empty_cache()
-        deviceinfo.backend.reset_peak_memory_stats()
+        device_module.deviceinfo.backend.empty_cache()
+        device_module.deviceinfo.backend.reset_peak_memory_stats()
         max_num_batched_tokens, max_model_len = (
             self.config.max_num_batched_tokens,
             self.config.max_model_len,
@@ -100,14 +101,14 @@ class ModelRunner:
         for seq in seqs:
             seq.num_scheduled_tokens = max_num_batched_tokens // 2
         self.run(seqs, True)
-        deviceinfo.backend.empty_cache()
+        device_module.deviceinfo.backend.empty_cache()
 
     def allocate_kv_cache(self):
         config, hf_config = self.config, self.config.hf_config
-        free, total = deviceinfo.backend.mem_get_info()
+        free, total = device_module.deviceinfo.backend.mem_get_info()
         used = total - free
-        peak = deviceinfo.backend.memory_stats()["allocated_bytes.all.peak"]
-        current = deviceinfo.backend.memory_stats()["allocated_bytes.all.current"]
+        peak = device_module.deviceinfo.backend.memory_stats()["allocated_bytes.all.peak"]
+        current = device_module.deviceinfo.backend.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         head_dim = getattr(
             hf_config,
@@ -291,7 +292,7 @@ class ModelRunner:
         if not self.enforce_eager:
             del self.graphs, self.graph_pool
 
-        deviceinfo.backend.synchronize()
+        device_module.deviceinfo.backend.synchronize()
         dist.destroy_process_group()
 
     @torch.inference_mode()
@@ -315,7 +316,7 @@ class ModelRunner:
         self.graph_pool = None
 
         for bs in reversed(self.graph_bs):
-            graph = deviceinfo.graph_cls()
+            graph = device_module.deviceinfo.graph_cls()
             # 只会捕获decode阶段
             set_context(
                 False,
@@ -325,14 +326,14 @@ class ModelRunner:
             )
             # 预热，前向之后返回的数据应该是(total_tokens, hidden_size)
             outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
-            with deviceinfo.backend.graph(graph, self.graph_pool):
+            with device_module.deviceinfo.backend.graph(graph, self.graph_pool):
                 # 捕获图，把前bs行填入buffer中
                 outputs[:bs] = self.model(input_ids[:bs], positions[:bs])
             if self.graph_pool is None:
                 # 只要不是并发replay/输出之间相互依赖, 这种操作可以减少显存占用
                 self.graph_pool = graph.pool()
             self.graphs[bs] = graph
-            deviceinfo.backend.synchronize()
+            device_module.deviceinfo.backend.synchronize()
             reset_context()
         # 保存对应图的输入输出地址
         self.graph_vars = dict(

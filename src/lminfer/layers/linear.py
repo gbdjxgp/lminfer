@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from lminfer.utils import deviceinfo
+from lminfer.utils import device as device_module
 
 
 def divide(numerator, denominator):
@@ -20,8 +20,8 @@ class LinearBase(nn.Module):
     ) -> None:
         super().__init__()
         self.tp_dim = tp_dim
-        self.tp_size = deviceinfo.tp_size
-        self.tp_rank = deviceinfo.tp_rank
+        self.tp_size = device_module.deviceinfo.tp_size
+        self.tp_rank = device_module.deviceinfo.tp_rank
         self.weight = nn.Parameter(torch.empty(output_size, input_size))
         self.weight.weight_loader = self.weight_loader
         if bias:
@@ -41,7 +41,7 @@ class ColumnParallelLinear(LinearBase):
         output_size: int,
         bias: bool = False,
     ) -> None:
-        tp_size = deviceinfo.tp_size
+        tp_size = device_module.deviceinfo.tp_size
         super().__init__(input_size, divide(output_size, tp_size), bias, tp_dim=0)
 
     def weight_loader(self, param: nn.parameter, loaded_weights: torch.Tensor):
@@ -85,7 +85,7 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
         total_num_kv_heads: int | None = None,
         bias: bool = False,
     ) -> None:
-        tp_size = deviceinfo.tp_size
+        tp_size = device_module.deviceinfo.tp_size
         total_num_kv_heads = total_num_kv_heads or total_num_heads
         self.head_size = head_size
 
@@ -127,7 +127,7 @@ class RowParallelLinear(LinearBase):
         output_size: int,
         bias: bool = False,
     ) -> None:
-        tp_size = deviceinfo.tp_size
+        tp_size = device_module.deviceinfo.tp_size
         super().__init__(divide(input_size, tp_size), output_size, bias, tp_dim=1)
 
     def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
