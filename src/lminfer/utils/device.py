@@ -76,3 +76,11 @@ class DeviceInfo:
 
 
 deviceinfo = None
+
+
+def get_tensor_parallel_info() -> tuple[int, int]:
+    if deviceinfo is not None:
+        return deviceinfo.tp_size, deviceinfo.tp_rank
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size(), dist.get_rank()
+    return 1, 0

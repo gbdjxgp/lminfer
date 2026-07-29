@@ -20,8 +20,7 @@ class LinearBase(nn.Module):
     ) -> None:
         super().__init__()
         self.tp_dim = tp_dim
-        self.tp_size = device_module.deviceinfo.tp_size
-        self.tp_rank = device_module.deviceinfo.tp_rank
+        self.tp_size, self.tp_rank = device_module.get_tensor_parallel_info()
         self.weight = nn.Parameter(torch.empty(output_size, input_size))
         self.weight.weight_loader = self.weight_loader
         if bias:
@@ -35,16 +34,18 @@ class LinearBase(nn.Module):
 
 
 class ColumnParallelLinear(LinearBase):
+    """Shard output features across tensor-parallel ranks."""
+
     def __init__(
         self,
         input_size: int,
         output_size: int,
         bias: bool = False,
     ) -> None:
-        tp_size = device_module.deviceinfo.tp_size
+        tp_size, _ = device_module.get_tensor_parallel_info()
         super().__init__(input_size, divide(output_size, tp_size), bias, tp_dim=0)
 
-    def weight_loader(self, param: nn.parameter, loaded_weights: torch.Tensor):
+    def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
         param_data = param.data
         shard_size = param.size(self.tp_dim)
         start_idx = self.tp_rank * shard_size
@@ -85,7 +86,7 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
         total_num_kv_heads: int | None = None,
         bias: bool = False,
     ) -> None:
-        tp_size = device_module.deviceinfo.tp_size
+        tp_size, _ = device_module.get_tensor_parallel_info()
         total_num_kv_heads = total_num_kv_heads or total_num_heads
         self.head_size = head_size
 
@@ -98,7 +99,7 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
         self,
         param: nn.Parameter,
         loaded_weights: torch.Tensor,
-        load_weight_id: int,
+        load_weight_id: str,
     ):
         param_data = param.data
         assert load_weight_id in ["q", "k", "v"]
@@ -116,8 +117,8 @@ class QKVColumnParallelLinear(ColumnParallelLinear):
             )
             shard_size = self.head_size * self.num_kv_heads
         param_data = param.data.narrow(self.tp_dim, shard_offset, shard_size)
-        loaded_weights.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
-        param_data.copy_(loaded_weights)
+        loaded_weight = loaded_weights.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
+        param_data.copy_(loaded_weight)
 
 
 class RowParallelLinear(LinearBase):
@@ -127,7 +128,7 @@ class RowParallelLinear(LinearBase):
         output_size: int,
         bias: bool = False,
     ) -> None:
-        tp_size = device_module.deviceinfo.tp_size
+        tp_size, _ = device_module.get_tensor_parallel_info()
         super().__init__(divide(input_size, tp_size), output_size, bias, tp_dim=1)
 
     def weight_loader(self, param: nn.Parameter, loaded_weights: torch.Tensor):
@@ -144,7 +145,7 @@ class RowParallelLinear(LinearBase):
         if self.tp_size > 1:
             y = F.linear(x, self.weight, None)
             dist.all_reduce(y, op=dist.ReduceOp.SUM)
-            if self.bias:
+            if self.bias is not None:
                 y += self.bias
         else:
             y = F.linear(x, self.weight, self.bias)
