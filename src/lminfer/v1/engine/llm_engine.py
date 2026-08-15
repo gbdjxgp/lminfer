@@ -4,7 +4,7 @@ import itertools
 
 from lminfer.config import LMInferConfig
 from lminfer.sampling_params import SamplingParams
-from lminfer.v1.requests import Request, RequestStatus
+from lminfer.v1.request import Request, RequestStatus
 
 
 class LLMEngine:
