@@ -42,7 +42,7 @@ class CUDAGraphMode(enum.Enum):
 
 @dataclass
 class CompilationConfig:
-    cudagraph_mode: CUDAGraphMode.FULL_DECODE_ONLY
+    cudagraph_mode: CUDAGraphMode = CUDAGraphMode.FULL_DECODE_ONLY
     enforce_eager: bool = False
     cudagraph_capture_sizes: list[int] = field(default_factory=list)
     # TODO: 搞清楚这个是干什么
